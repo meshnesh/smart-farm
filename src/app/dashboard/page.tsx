@@ -8,7 +8,7 @@ import { Topbar } from "@/components/Topbar";
 import { KpiCard } from "@/components/KpiCard";
 import { Card, CardBody, CardHeader } from "@/components/Card";
 import { MoistureArea, TempArea } from "@/components/Charts";
-import { getCurrentFarmId } from "@/lib/session";
+import { getCurrentFarmId, setCurrentFarmId } from "@/lib/session";
 import {
   listFarms,
   subscribeSensors,
@@ -17,6 +17,7 @@ import {
 } from "@/lib/data";
 import type { Sensor } from "@/lib/types";
 import { Thermometer, Droplets, CloudRain, MapPin, Lightbulb } from "lucide-react";
+import { DBG } from "@/lib/debug";
 
 function soilLabelFromAvg(avg: number | null) {
   if (avg === null) return { label: "—", desc: "No data yet.", tone: "default" as const };
@@ -81,7 +82,11 @@ type WeatherInfo = {
   error?: string;
 };
 
-function getAdvice(input: { avgMoisture: number | null; precipitationMm: number | null; humidity: number | null }) {
+function getAdvice(input: {
+  avgMoisture: number | null;
+  precipitationMm: number | null;
+  humidity: number | null;
+}) {
   const { avgMoisture, precipitationMm, humidity } = input;
 
   const isWetNow = typeof precipitationMm === "number" && precipitationMm >= 1.0;
@@ -92,23 +97,37 @@ function getAdvice(input: { avgMoisture: number | null; precipitationMm: number 
 
   if (avgMoisture == null && precipitationMm == null) {
     return {
-      message: "Not enough data yet. Once readings and weather are available, we’ll suggest actions here.",
+      message:
+        "Not enough data yet. Once readings and weather are available, we’ll suggest actions here.",
       tone: "default" as const,
       bullets: ["Ensure sensors are reporting.", "Confirm farm location is set correctly."],
     };
   }
   if (isHeavyRain) {
-    return { message: "Heavy rain detected. Hold off watering and check drainage / flooding risk.", tone: "warn" as const, bullets: ["Inspect low points and drains.", "Delay irrigation until soil stabilizes."] };
+    return {
+      message: "Heavy rain detected. Hold off watering and check drainage / flooding risk.",
+      tone: "warn" as const,
+      bullets: ["Inspect low points and drains.", "Delay irrigation until soil stabilizes."],
+    };
   }
   if (isWetNow) {
-    return { message: "Rain detected. Avoid watering for now and re-check moisture later.", tone: "good" as const, bullets: ["Re-check in a few hours.", "Watch for over-saturation in clay soils."] };
+    return {
+      message: "Rain detected. Avoid watering for now and re-check moisture later.",
+      tone: "good" as const,
+      bullets: ["Re-check in a few hours.", "Watch for over-saturation in clay soils."],
+    };
   }
   if (isDrySoil) {
-    return { message: "Soil looks dry and no rain detected. Water today, then monitor the next reading.", tone: "bad" as const, bullets: ["Irrigate in the morning/evening.", "Check for leaks or blocked lines."] };
+    return {
+      message: "Soil looks dry and no rain detected. Water today, then monitor the next reading.",
+      tone: "bad" as const,
+      bullets: ["Irrigate in the morning/evening.", "Check for leaks or blocked lines."],
+    };
   }
   if (isOkaySoil) {
     return {
-      message: "Moisture is moderate. Consider a light watering if your crop is sensitive to dryness.",
+      message:
+        "Moisture is moderate. Consider a light watering if your crop is sensitive to dryness.",
       tone: "warn" as const,
       bullets: [
         `Humidity ${typeof humidity === "number" ? `is ${humidity}%` : "is not available"} — adjust watering if winds are high.`,
@@ -117,15 +136,22 @@ function getAdvice(input: { avgMoisture: number | null; precipitationMm: number 
     };
   }
   if (isGoodSoil) {
-    return { message: "Moisture looks good. Maintain schedule and monitor for any sudden drops.", tone: "good" as const, bullets: ["No urgent action needed.", "Compare zones to spot uneven watering."] };
+    return {
+      message: "Moisture looks good. Maintain schedule and monitor for any sudden drops.",
+      tone: "good" as const,
+      bullets: ["No urgent action needed.", "Compare zones to spot uneven watering."],
+    };
   }
-  return { message: "Monitor conditions and adjust irrigation based on your crop and soil type.", tone: "default" as const, bullets: ["Track trend changes.", "Compare zones to spot uneven watering."] };
+  return {
+    message: "Monitor conditions and adjust irrigation based on your crop and soil type.",
+    tone: "default" as const,
+    bullets: ["Track trend changes.", "Compare zones to spot uneven watering."],
+  };
 }
 
 function isAuthishError(err: any) {
   const code = err?.code ?? "";
   const msg = String(err?.message ?? "");
-
   return (
     code === "permission-denied" ||
     code === "unauthenticated" ||
@@ -146,37 +172,57 @@ export default function DashboardPage() {
   const [series, setSeries] = useState<ReadingPoint[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  // Weather
   const [weather, setWeather] = useState<WeatherInfo | null>(null);
   const [weatherLoading, setWeatherLoading] = useState(false);
 
   const handleAuthError = (err: any) => {
     if (isAuthishError(err)) {
+      DBG("Dashboard: auth-ish error -> redirect /login", { code: err?.code, message: err?.message });
       router.replace("/login");
       return true;
     }
     return false;
   };
 
-  // Load farms + selected farm id
   useEffect(() => {
     let cancelled = false;
+
     (async () => {
       try {
+        DBG("Dashboard: loading farms", { storedFarmId: getCurrentFarmId() });
+
         const all = await listFarms();
         if (cancelled) return;
 
-        // If user is not signed in, listFarms() returns []
+        DBG("Dashboard: listFarms returned", {
+          count: all?.length ?? 0,
+          ids: (all ?? []).map((f: any) => f.id),
+        });
+
         if (!all?.length) {
+          DBG("Dashboard: no farms -> redirect /login");
           router.replace("/login");
           return;
         }
 
         setFarms(all);
-        const selected = getCurrentFarmId() ?? all[0]?.id ?? null;
-        setFarmId(selected);
+
+        const preferred = getCurrentFarmId();
+        const isValid = preferred ? all.some((f: any) => f.id === preferred) : false;
+        const resolved = isValid ? preferred : all[0]?.id ?? null;
+
+        DBG("Dashboard: resolve farm", { preferred, isValid, resolved });
+
+        if (resolved && resolved !== preferred) {
+          DBG("Dashboard: persisting resolved farmId", { resolved });
+          setCurrentFarmId(resolved);
+          DBG("Dashboard: storedFarmId now", { stored: getCurrentFarmId() });
+        }
+
+        setFarmId(resolved);
       } catch (e: any) {
         if (cancelled) return;
+        DBG("Dashboard: farms load ERROR", { message: e?.message, code: e?.code, e });
         if (handleAuthError(e)) return;
         setError(e?.message ?? "Failed to load farms");
       }
@@ -187,29 +233,46 @@ export default function DashboardPage() {
     };
   }, [router]);
 
-  const farm = useMemo(() => farms.find((f) => f.id === farmId) ?? farms[0] ?? null, [farms, farmId]);
+  const farm = useMemo(() => {
+    if (!farms.length) return null;
+    return farms.find((f) => f.id === farmId) ?? farms[0] ?? null;
+  }, [farms, farmId]);
+
   const farmLocation = (farm?.location ?? "").trim();
 
-  // Realtime sensors subscription
   useEffect(() => {
     if (!farmId) return;
+
+    DBG("Dashboard: subscribeSensors start", { farmId });
 
     setError(null);
     setSensors([]);
 
     const unsub = subscribeSensors(
       farmId,
-      (rows) => setSensors(rows as any),
+      (rows) => {
+        DBG("Dashboard: subscribeSensors data", { farmId, count: rows?.length ?? 0 });
+        setSensors(rows as any);
+      },
       (err) => {
+        DBG("Dashboard: subscribeSensors error", {
+          farmId,
+          code: err?.code,
+          message: err?.message,
+          err,
+        });
+
         if (handleAuthError(err)) return;
         setError(err?.message ?? String(err));
       }
     );
 
-    return () => unsub();
+    return () => {
+      DBG("Dashboard: subscribeSensors unsub", { farmId });
+      unsub();
+    };
   }, [farmId]);
 
-  // Fetch weather when farm location changes
   useEffect(() => {
     if (!farmLocation) {
       setWeather(null);
@@ -217,20 +280,38 @@ export default function DashboardPage() {
     }
 
     let cancelled = false;
+
     (async () => {
       try {
         setWeatherLoading(true);
-        const res = await fetch(`/api/weather?location=${encodeURIComponent(farmLocation)}`, { cache: "no-store" });
+        const res = await fetch(`/api/weather?location=${encodeURIComponent(farmLocation)}`, {
+          cache: "no-store",
+        });
         const json = (await res.json()) as WeatherInfo;
         if (cancelled) return;
 
         if (!res.ok) {
-          setWeather({ location: farmLocation, tempC: null, humidity: null, precipitationMm: null, error: (json as any)?.error || "Weather error" });
+          setWeather({
+            location: farmLocation,
+            tempC: null,
+            humidity: null,
+            precipitationMm: null,
+            error: (json as any)?.error || "Weather error",
+          });
           return;
         }
+
         setWeather(json);
       } catch {
-        if (!cancelled) setWeather({ location: farmLocation, tempC: null, humidity: null, precipitationMm: null, error: "Weather request failed" });
+        if (!cancelled) {
+          setWeather({
+            location: farmLocation,
+            tempC: null,
+            humidity: null,
+            precipitationMm: null,
+            error: "Weather request failed",
+          });
+        }
       } finally {
         if (!cancelled) setWeatherLoading(false);
       }
@@ -241,7 +322,6 @@ export default function DashboardPage() {
     };
   }, [farmLocation]);
 
-  // zones from sensors
   const zones = useMemo(() => {
     const z = Array.from(new Set((sensors ?? []).map((s: any) => s.zone ?? "Unassigned")));
     z.sort((a: string, b: string) => a.localeCompare(b));
@@ -253,7 +333,6 @@ export default function DashboardPage() {
     return sensors.filter((s: any) => (s.zone ?? "Unassigned") === zone);
   }, [sensors, zone]);
 
-  // KPIs from filtered sensors
   const kpi = useMemo(() => {
     const online = filteredSensors.filter((s: any) => s.status === "online").length;
     const warning = filteredSensors.filter((s: any) => s.status === "warning").length;
@@ -263,41 +342,62 @@ export default function DashboardPage() {
       .map((s: any) => s.latest?.soilMoisture)
       .filter((v: any): v is number => typeof v === "number");
 
-    const avgMoisture =
-      moistVals.length ? Math.round((moistVals.reduce((a: number, b: number) => a + b, 0) / moistVals.length) * 10) / 10 : null;
+    const avgMoisture = moistVals.length
+      ? Math.round((moistVals.reduce((a: number, b: number) => a + b, 0) / moistVals.length) * 10) / 10
+      : null;
 
     return { online, warning, offline, avgMoisture };
   }, [filteredSensors]);
 
-  // Pick a “primary” sensor for 24h trend (first in zone)
   const primarySensorId = useMemo(() => {
     const candidate: any = filteredSensors[0] ?? sensors[0];
     return candidate?.id ?? null;
   }, [filteredSensors, sensors]);
 
-  // Realtime readings subscription (24h series)
   useEffect(() => {
     if (!primarySensorId) {
+      DBG("Dashboard: no primarySensorId -> clear series");
       setSeries([]);
       return;
     }
 
+    DBG("Dashboard: subscribeSensorSeries24h start", { primarySensorId });
+
     const unsub = subscribeSensorSeries24h(
       primarySensorId,
-      (pts) => setSeries(pts),
+      (pts) => {
+        DBG("Dashboard: subscribeSensorSeries24h data", { primarySensorId, count: pts?.length ?? 0 });
+        setSeries(pts);
+      },
       (err) => {
+        DBG("Dashboard: subscribeSensorSeries24h error", {
+          primarySensorId,
+          code: err?.code,
+          message: err?.message,
+          err,
+        });
+
         if (handleAuthError(err)) return;
-        // keep page usable, just clear the chart
         setSeries([]);
       },
       48
     );
 
-    return () => unsub();
+    return () => {
+      DBG("Dashboard: subscribeSensorSeries24h unsub", { primarySensorId });
+      unsub();
+    };
   }, [primarySensorId]);
 
-  const moistureChart = useMemo(() => series.map((p) => ({ hour: p.label, moisture: p.moisture })), [series]);
-  const tempChart = useMemo(() => series.map((p) => ({ label: p.label, tempC: p.tempC })), [series]);
+  const moistureChart = useMemo(
+    () => series.map((p) => ({ hour: p.label, moisture: p.moisture })),
+    [series]
+  );
+
+  const tempChart = useMemo(
+    () => series.map((p) => ({ label: p.label, tempC: p.tempC })),
+    [series]
+  );
 
   const moistureSummary = useMemo(() => {
     const vals = series.map((p) => p.moisture).filter((v) => typeof v === "number" && isFinite(v));
@@ -324,7 +424,6 @@ export default function DashboardPage() {
       <Topbar title={farm?.farmName ?? farm?.name ?? "Dashboard"} />
 
       <div className="p-4 md:p-6 space-y-6">
-        {/* Header */}
         <div className="flex items-center justify-between gap-3">
           <div>
             <div className="text-sm text-gray-600">{farm?.location ?? "—"}</div>
@@ -358,21 +457,26 @@ export default function DashboardPage() {
           </div>
         ) : null}
 
-        {/* Weather */}
         <Card>
           <CardHeader title="Weather" right={<span className="text-xs text-gray-500">live</span>} />
           <CardBody>
             <div className="flex items-center gap-2 text-sm text-gray-700">
               <MapPin className="h-4 w-4 text-gray-500" />
               <span className="font-medium">{farm?.location ?? "—"}</span>
-              {weather?.asOf ? <span className="text-xs text-gray-500">• Updated {new Date(weather.asOf).toLocaleTimeString()}</span> : null}
+              {weather?.asOf ? (
+                <span className="text-xs text-gray-500">
+                  • Updated {new Date(weather.asOf).toLocaleTimeString()}
+                </span>
+              ) : null}
             </div>
 
             <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
               <StatTile
                 icon={<Thermometer className="h-6 w-6" />}
                 label="Temperature"
-                value={weatherLoading ? "…" : typeof weather?.tempC === "number" ? `${weather.tempC.toFixed(1)}°C` : "—"}
+                value={
+                  weatherLoading ? "…" : typeof weather?.tempC === "number" ? `${weather.tempC.toFixed(1)}°C` : "—"
+                }
                 sub={weatherLoading ? "" : (weather?.description ?? "")}
                 tone={typeof weather?.tempC === "number" ? "good" : "default"}
               />
@@ -387,15 +491,26 @@ export default function DashboardPage() {
               <StatTile
                 icon={<CloudRain className="h-6 w-6" />}
                 label="Precipitation"
-                value={weatherLoading ? "…" : typeof weather?.precipitationMm === "number" ? `${weather.precipitationMm.toFixed(1)} mm` : "—"}
+                value={
+                  weatherLoading
+                    ? "…"
+                    : typeof weather?.precipitationMm === "number"
+                    ? `${weather.precipitationMm.toFixed(1)} mm`
+                    : "—"
+                }
                 sub={!weatherLoading && weather?.error ? `(${weather.error})` : undefined}
-                tone={typeof weather?.precipitationMm === "number" ? (weather.precipitationMm > 5 ? "warn" : "good") : "default"}
+                tone={
+                  typeof weather?.precipitationMm === "number"
+                    ? weather.precipitationMm > 5
+                      ? "warn"
+                      : "good"
+                    : "default"
+                }
               />
             </div>
           </CardBody>
         </Card>
 
-        {/* Advice */}
         <Card>
           <CardHeader
             title="Advice"
@@ -426,12 +541,13 @@ export default function DashboardPage() {
                   ))}
                 </ul>
               ) : null}
-              <div className="mt-3 text-xs text-gray-500">Based on the last 24h moisture trend + current weather for the farm location.</div>
+              <div className="mt-3 text-xs text-gray-500">
+                Based on the last 24h moisture trend + current weather for the farm location.
+              </div>
             </div>
           </CardBody>
         </Card>
 
-        {/* Zones */}
         <Card>
           <CardHeader title="Zones" />
           <CardBody>
@@ -442,7 +558,9 @@ export default function DashboardPage() {
                   onClick={() => setZone(z)}
                   className={[
                     "rounded-full px-3 py-1 text-sm font-medium border",
-                    zone === z ? "bg-emerald-600 text-white border-emerald-600" : "bg-white hover:bg-gray-50",
+                    zone === z
+                      ? "bg-emerald-600 text-white border-emerald-600"
+                      : "bg-white hover:bg-gray-50",
                   ].join(" ")}
                 >
                   {z}
@@ -452,15 +570,17 @@ export default function DashboardPage() {
           </CardBody>
         </Card>
 
-        {/* KPIs */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <KpiCard title="Online" value={`${kpi.online}`} hint="Sensors active" tone="good" />
           <KpiCard title="Warning" value={`${kpi.warning}`} hint="Needs attention" tone="warn" />
           <KpiCard title="Offline" value={`${kpi.offline}`} hint="Not reporting" tone="bad" />
-          <KpiCard title="Avg Moisture" value={kpi.avgMoisture === null ? "—" : `${kpi.avgMoisture}%`} hint="Across sensors" />
+          <KpiCard
+            title="Avg Moisture"
+            value={kpi.avgMoisture === null ? "—" : `${kpi.avgMoisture}%`}
+            hint="Across sensors"
+          />
         </div>
 
-        {/* Soil status + Moisture summary */}
         <div className="grid md:grid-cols-2 gap-4">
           <Card>
             <CardHeader title="Soil Status" />
@@ -494,22 +614,27 @@ export default function DashboardPage() {
               <div className="grid grid-cols-3 gap-3">
                 <div className="rounded-2xl border p-3">
                   <div className="text-xs text-gray-500">Min</div>
-                  <div className="text-lg font-semibold">{moistureSummary.min === null ? "—" : `${moistureSummary.min}%`}</div>
+                  <div className="text-lg font-semibold">
+                    {moistureSummary.min === null ? "—" : `${moistureSummary.min}%`}
+                  </div>
                 </div>
                 <div className="rounded-2xl border p-3">
                   <div className="text-xs text-gray-500">Avg</div>
-                  <div className="text-lg font-semibold">{moistureSummary.avg === null ? "—" : `${moistureSummary.avg}%`}</div>
+                  <div className="text-lg font-semibold">
+                    {moistureSummary.avg === null ? "—" : `${moistureSummary.avg}%`}
+                  </div>
                 </div>
                 <div className="rounded-2xl border p-3">
                   <div className="text-xs text-gray-500">Max</div>
-                  <div className="text-lg font-semibold">{moistureSummary.max === null ? "—" : `${moistureSummary.max}%`}</div>
+                  <div className="text-lg font-semibold">
+                    {moistureSummary.max === null ? "—" : `${moistureSummary.max}%`}
+                  </div>
                 </div>
               </div>
             </CardBody>
           </Card>
         </div>
 
-        {/* Charts */}
         <div className="grid md:grid-cols-2 gap-4">
           <Card>
             <CardHeader title="Moisture Trend" right={<span className="text-xs text-gray-500">Realtime</span>} />
@@ -526,7 +651,6 @@ export default function DashboardPage() {
           </Card>
         </div>
 
-        {/* Sensors list */}
         <Card>
           <CardHeader
             title="Sensors"
@@ -539,12 +663,20 @@ export default function DashboardPage() {
           <CardBody>
             <div className="grid gap-3">
               {filteredSensors.slice(0, 4).map((s: any) => (
-                <Link key={s.id} href={`/sensors/${encodeURIComponent(s.id)}`} className="rounded-2xl border p-4 hover:bg-gray-50">
+                <Link
+                  key={s.id}
+                  href={`/sensors/${encodeURIComponent(s.id)}`}
+                  className="rounded-2xl border p-4 hover:bg-gray-50"
+                >
                   <div className="flex items-center gap-3">
                     <div
                       className={[
                         "h-3 w-3 rounded-full",
-                        s.status === "online" ? "bg-emerald-600" : s.status === "warning" ? "bg-amber-500" : "bg-rose-500",
+                        s.status === "online"
+                          ? "bg-emerald-600"
+                          : s.status === "warning"
+                          ? "bg-amber-500"
+                          : "bg-rose-500",
                       ].join(" ")}
                     />
                     <div className="flex-1">
@@ -553,7 +685,9 @@ export default function DashboardPage() {
                         {(s.zone ?? "Unassigned")} • Last seen {s.lastSeen}
                       </div>
                     </div>
-                    <div className="text-sm font-medium text-gray-700">{String(s.type ?? "UNKNOWN").toUpperCase()}</div>
+                    <div className="text-sm font-medium text-gray-700">
+                      {String(s.type ?? "UNKNOWN").toUpperCase()}
+                    </div>
                   </div>
                 </Link>
               ))}
@@ -561,7 +695,9 @@ export default function DashboardPage() {
               {!filteredSensors.length ? (
                 <div className="rounded-2xl border border-dashed p-6 text-center">
                   <div className="font-semibold">No sensors</div>
-                  <div className="mt-1 text-sm text-gray-600">Try switching zones or adding a sensor.</div>
+                  <div className="mt-1 text-sm text-gray-600">
+                    Try switching zones or adding a sensor.
+                  </div>
                 </div>
               ) : null}
             </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { PageShell } from "@/components/PageShell";
@@ -9,10 +9,10 @@ import { Card, CardBody, CardHeader } from "@/components/Card";
 import { listFarms } from "@/lib/data";
 import { getCurrentFarmId, setCurrentFarmId } from "@/lib/session";
 import { auth } from "@/lib/firebaseClient";
+import { DBG } from "@/lib/debug";
 
 type FarmRow = {
   id: string;
-  farmId?: string;
   farmName?: string;
   name?: string;
   location?: string;
@@ -28,18 +28,25 @@ export default function SelectFarmPage() {
   const [selected, setSelected] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Auth gate + load farms
   useEffect(() => {
+    DBG("SelectFarm mount", { storedFarmId: getCurrentFarmId() });
+
     let cancelled = false;
 
     const unsub = auth().onAuthStateChanged(async (u) => {
       if (cancelled) return;
 
-      // not signed in -> login
       if (!u) {
+        DBG("SelectFarm: no user -> redirect /login");
         router.replace("/login");
         return;
       }
+
+      DBG("SelectFarm: auth ok", {
+        uid: u.uid,
+        email: u.email ?? null,
+        storedFarmId: getCurrentFarmId(),
+      });
 
       try {
         setLoading(true);
@@ -48,8 +55,13 @@ export default function SelectFarmPage() {
         const rows = await listFarms();
         if (cancelled) return;
 
-        // no farms -> onboarding
+        DBG("SelectFarm: farms loaded", {
+          count: rows?.length ?? 0,
+          ids: (rows ?? []).map((f: any) => f.id),
+        });
+
         if (!rows || rows.length === 0) {
+          DBG("SelectFarm: farms=0 -> redirect /onboarding");
           router.replace("/onboarding");
           return;
         }
@@ -57,12 +69,21 @@ export default function SelectFarmPage() {
         setFarms(rows as any);
 
         const preferred = getCurrentFarmId();
-        const initial =
-          (preferred && rows.some((f: any) => f.id === preferred)) ? preferred : rows[0].id;
+        const preferredIsValid = !!preferred && rows.some((f: any) => f.id === preferred);
+
+        const initial = preferredIsValid ? (preferred as string) : rows[0].id;
+
+        DBG("SelectFarm: selection resolve", { preferred, preferredIsValid, initial });
+
+        if (!preferredIsValid) {
+          setCurrentFarmId(initial);
+          DBG("SelectFarm: storedFarmId healed", { stored: getCurrentFarmId() });
+        }
 
         setSelected(initial);
       } catch (e: any) {
         if (cancelled) return;
+        DBG("SelectFarm: ERROR", { message: e?.message, code: e?.code, e });
         setError(e?.message ?? "Failed to load farms");
         setFarms([]);
       } finally {
@@ -80,7 +101,9 @@ export default function SelectFarmPage() {
 
   const onContinue = () => {
     if (!selected) return;
+    DBG("SelectFarm: continue", { selected });
     setCurrentFarmId(selected);
+    DBG("SelectFarm: storedFarmId now", { stored: getCurrentFarmId() });
     router.replace("/dashboard");
   };
 
@@ -116,7 +139,7 @@ export default function SelectFarmPage() {
                     const crops =
                       Array.isArray(f.crops) && f.crops.length
                         ? f.crops.join(", ")
-                        : (f.crop ?? "");
+                        : f.crop ?? "";
 
                     const isSelected = selected === f.id;
 
@@ -177,7 +200,7 @@ export default function SelectFarmPage() {
                 </div>
 
                 <div className="mt-2 text-xs text-gray-500">
-                  Later we’ll connect this to membership + invites and org/workspace access.
+                  Later we’ll connect this to org/workspaces + invites.
                 </div>
               </>
             )}

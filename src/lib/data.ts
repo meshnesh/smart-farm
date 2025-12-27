@@ -1,3 +1,5 @@
+"use client";
+
 import {
   collection,
   getDocs,
@@ -15,11 +17,18 @@ import {
 
 import { db, auth } from "./firebaseClient";
 import { farms as mockFarms, sensorsByFarm } from "./mock";
+import { DBG } from "@/lib/debug";
 
 const useFirestore = process.env.NEXT_PUBLIC_USE_FIRESTORE === "true";
 
 function currentUser() {
   return auth().currentUser ?? null;
+}
+
+function currentUserOrThrow() {
+  const u = currentUser();
+  if (!u) throw new Error("Not signed in");
+  return u;
 }
 
 const formatLastSeen = (ts?: Date | null) => {
@@ -53,7 +62,7 @@ function toDateMaybe(v: any): Date | null {
 }
 
 export type ReadingPoint = {
-  label: string; // "13:00"
+  label: string;
   moisture: number;
   tempC: number;
   timestamp?: Date | null;
@@ -61,45 +70,78 @@ export type ReadingPoint = {
 
 /** FARMS */
 export async function listFarms() {
-  if (!useFirestore) return mockFarms;
+  if (!useFirestore) {
+    DBG("listFarms: useFirestore=false -> returning mockFarms", { count: mockFarms.length });
+    return mockFarms;
+  }
 
   const user = currentUser();
-  if (!user) return []; // avoid crashes; UI should redirect to login
+  DBG("listFarms: start", { hasUser: !!user, uid: user?.uid ?? null });
+
+  if (!user) {
+    DBG("listFarms: no user -> returning []");
+    return [];
+  }
 
   const qy = query(collection(db(), "farms"), where("userId", "==", user.uid), limit(100));
+  DBG("listFarms: running query", { uid: user.uid });
+
   const snap = await getDocs(qy);
+
+  DBG("listFarms: query done", {
+    size: snap.size,
+    docIds: snap.docs.map((d) => d.id),
+  });
 
   return snap.docs.map((d) => {
     const x: any = d.data();
+    const canonicalId = d.id;
+
     return {
-      id: d.id,
-      farmId: x.farmId ?? d.id,
-      farmName: x.farmName ?? x.name ?? d.id,
-      name: x.farmName ?? x.name ?? d.id,
+      id: canonicalId,
+      farmId: canonicalId,
+      legacyFarmId: x.farmId ?? null,
+
+      farmName: x.farmName ?? x.name ?? canonicalId,
+      name: x.farmName ?? x.name ?? canonicalId,
       location: x.location ?? "",
       crop: x.crop ?? "",
-      crops: Array.isArray(x.crops) ? x.crops : undefined,
-      sizeInSquareMeters: typeof x.sizeInSquareMeters === "number" ? x.sizeInSquareMeters : undefined,
-      zones: x.zones ?? undefined,
-      userId: x.userId ?? undefined,
+      crops: Array.isArray(x.crops) ? x.crops : [],
+      zones: x.zones ?? null,
+      sizeInSquareMeters: typeof x.sizeInSquareMeters === "number" ? x.sizeInSquareMeters : null,
+      userId: x.userId ?? null,
     };
   });
 }
 
 export async function getFarm(farmId: string) {
-  if (!useFirestore) return null;
+  if (!useFirestore) {
+    DBG("getFarm: useFirestore=false -> null", { farmId });
+    return null;
+  }
 
   const user = currentUser();
-  if (!user) return null;
+  DBG("getFarm: start", { farmId, hasUser: !!user, uid: user?.uid ?? null });
+
+  if (!user) {
+    DBG("getFarm: no user -> null");
+    return null;
+  }
 
   const ref = doc(db(), "farms", farmId);
   const snap = await getDoc(ref);
+
+  DBG("getFarm: got doc", { farmId, exists: snap.exists() });
+
   if (!snap.exists()) return null;
 
   const x: any = snap.data();
+  DBG("getFarm: data", { docId: snap.id, userId: x.userId ?? null });
+
   return {
     id: snap.id,
-    farmId: x.farmId ?? snap.id,
+    farmId: snap.id,
+    legacyFarmId: x.farmId ?? null,
     farmName: x.farmName ?? x.name ?? snap.id,
     name: x.farmName ?? x.name ?? snap.id,
     location: x.location ?? "",
@@ -110,6 +152,10 @@ export async function getFarm(farmId: string) {
   };
 }
 
+/**
+ * Create a farm.
+ * Rules require request.resource.data.farmId == document id.
+ */
 export async function createFarm(input: {
   farmName: string;
   location: string;
@@ -118,15 +164,13 @@ export async function createFarm(input: {
   zones: number;
 }): Promise<{ farmId: string }> {
   if (!useFirestore) {
-    // mock mode
+    DBG("createFarm: useFirestore=false -> FARM_LOCAL");
     return { farmId: "FARM_LOCAL" };
   }
 
-  const user = currentUser();
-  if (!user) throw new Error("Not signed in");
+  const user = currentUserOrThrow();
+  DBG("createFarm: start", { uid: user.uid, input });
 
-  // Your rules require request.resource.data.farmId == document id.
-  // Generate doc id first, then setDoc with farmId = that id.
   const farmsCol = collection(db(), "farms");
   const farmRef = doc(farmsCol);
   const farmId = farmRef.id;
@@ -135,27 +179,37 @@ export async function createFarm(input: {
     farmId,
     farmName: input.farmName,
     location: input.location,
-    sizeInSquareMeters: input.sizeInSquareMeters,
+    sizeInSquareMeters: Math.round(input.sizeInSquareMeters),
     crops: input.crops ?? [],
-    zones: String(input.zones), // keep compatible with your existing data (string)
+    zones: String(input.zones),
     userId: user.uid,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   };
 
+  DBG("createFarm: writing farm doc", { farmId, payload });
   await setDoc(farmRef, payload, { merge: false });
+  DBG("createFarm: done", { farmId });
+
   return { farmId };
 }
 
 /** SENSORS */
 export async function listSensors(farmId: string) {
-  if (!useFirestore) return (sensorsByFarm as any)[farmId] ?? [];
+  if (!useFirestore) {
+    DBG("listSensors: useFirestore=false -> from mock", { farmId });
+    return (sensorsByFarm as any)[farmId] ?? [];
+  }
 
   const user = currentUser();
+  DBG("listSensors: start", { farmId, hasUser: !!user, uid: user?.uid ?? null });
+
   if (!user) return [];
 
   const qy = query(collection(db(), "sensors"), where("farmId", "==", farmId), limit(500));
   const snap = await getDocs(qy);
+
+  DBG("listSensors: query done", { farmId, size: snap.size, ids: snap.docs.map((d) => d.id) });
 
   return snap.docs.map((d) => {
     const x: any = d.data();
@@ -194,14 +248,19 @@ export function subscribeSensors(
   onError?: (err: any) => void
 ): Unsubscribe {
   if (!useFirestore) {
+    DBG("subscribeSensors: useFirestore=false -> mock emit", { farmId });
     onData((sensorsByFarm as any)[farmId] ?? []);
     return () => {};
   }
 
   const user = currentUser();
+  DBG("subscribeSensors: start", { farmId, hasUser: !!user, uid: user?.uid ?? null });
+
   if (!user) {
     onData([]);
-    onError?.(Object.assign(new Error("Not signed in"), { code: "auth/not-signed-in" }));
+    const err = Object.assign(new Error("Not signed in"), { code: "auth/not-signed-in" });
+    DBG("subscribeSensors: no user -> error", err);
+    onError?.(err);
     return () => {};
   }
 
@@ -210,6 +269,8 @@ export function subscribeSensors(
   return onSnapshot(
     qy,
     (snap) => {
+      DBG("subscribeSensors: snapshot", { farmId, size: snap.size, ids: snap.docs.map((d) => d.id) });
+
       const sensors = snap.docs.map((d) => {
         const x: any = d.data();
         const latest: any = x.latest ?? null;
@@ -240,6 +301,7 @@ export function subscribeSensors(
       onData(sensors);
     },
     (err) => {
+      DBG("subscribeSensors: ERROR", { farmId, code: (err as any)?.code, message: (err as any)?.message, err });
       onData([]);
       if (onError) onError(err);
       else console.error(err);
@@ -250,6 +312,7 @@ export function subscribeSensors(
 /** READINGS */
 export async function latestReadings(sensorId: string, n = 48) {
   if (!useFirestore) {
+    DBG("latestReadings: useFirestore=false -> mock", { sensorId, n });
     const now = Date.now();
     return Array.from({ length: n }).map((_, i) => ({
       timestamp: new Date(now - (n - 1 - i) * 30 * 60 * 1000),
@@ -259,16 +322,24 @@ export async function latestReadings(sensorId: string, n = 48) {
   }
 
   const user = currentUser();
+  DBG("latestReadings: start", { sensorId, n, hasUser: !!user, uid: user?.uid ?? null });
+
   if (!user) return [];
 
-  const qy = query(collection(db(), "sensors", sensorId, "readings"), orderBy("timestamp", "desc"), limit(n));
+  const qy = query(
+    collection(db(), "sensors", sensorId, "readings"),
+    orderBy("timestamp", "desc"),
+    limit(n)
+  );
+
   const snap = await getDocs(qy);
+  DBG("latestReadings: query done", { sensorId, size: snap.size });
 
   return snap.docs.map((d) => d.data());
 }
 
 /**
- * REALTIME: Subscribe to readings for last ~24h (by count, not strict time window).
+ * REALTIME: Subscribe to readings for last ~24h (by count)
  */
 export function subscribeSensorSeries24h(
   sensorId: string,
@@ -277,6 +348,8 @@ export function subscribeSensorSeries24h(
   n = 48
 ): Unsubscribe {
   if (!useFirestore) {
+    DBG("subscribeSensorSeries24h: useFirestore=false -> mock emit", { sensorId, n });
+
     const now = Date.now();
     const points: ReadingPoint[] = Array.from({ length: n }).map((_, i) => {
       const dt = new Date(now - (n - 1 - i) * 30 * 60 * 1000);
@@ -292,20 +365,29 @@ export function subscribeSensorSeries24h(
   }
 
   const user = currentUser();
+  DBG("subscribeSensorSeries24h: start", { sensorId, n, hasUser: !!user, uid: user?.uid ?? null });
+
   if (!user) {
     onData([]);
-    onError?.(Object.assign(new Error("Not signed in"), { code: "auth/not-signed-in" }));
+    const err = Object.assign(new Error("Not signed in"), { code: "auth/not-signed-in" });
+    DBG("subscribeSensorSeries24h: no user -> error", err);
+    onError?.(err);
     return () => {};
   }
 
-  const qy = query(collection(db(), "sensors", sensorId, "readings"), orderBy("timestamp", "desc"), limit(n));
+  const qy = query(
+    collection(db(), "sensors", sensorId, "readings"),
+    orderBy("timestamp", "desc"),
+    limit(n)
+  );
 
   return onSnapshot(
     qy,
     (snap) => {
+      DBG("subscribeSensorSeries24h: snapshot", { sensorId, size: snap.size });
+
       const rows = snap.docs.map((d) => d.data());
 
-      // oldest -> newest for charts
       const points: ReadingPoint[] = rows
         .slice()
         .reverse()
@@ -326,6 +408,7 @@ export function subscribeSensorSeries24h(
       onData(points);
     },
     (err) => {
+      DBG("subscribeSensorSeries24h: ERROR", { sensorId, code: (err as any)?.code, message: (err as any)?.message, err });
       onData([]);
       if (onError) onError(err);
       else console.error(err);
@@ -333,9 +416,9 @@ export function subscribeSensorSeries24h(
   );
 }
 
-// Backwards compatible (non-realtime fetch)
 export async function sensorSeries24h(sensorId: string, n = 48): Promise<ReadingPoint[]> {
   if (!useFirestore) {
+    DBG("sensorSeries24h: useFirestore=false -> mock", { sensorId, n });
     const now = Date.now();
     return Array.from({ length: n }).map((_, i) => {
       const dt = new Date(now - (n - 1 - i) * 30 * 60 * 1000);

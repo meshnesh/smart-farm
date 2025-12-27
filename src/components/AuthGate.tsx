@@ -4,11 +4,15 @@ import { ReactNode, useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { auth } from "@/lib/firebaseClient";
-import { getCurrentFarmId } from "@/lib/session";
-import { listFarms } from "@/lib/data";
+import {
+  clearCurrentFarmId,
+  getCurrentFarmId,
+  setCurrentFarmId,
+} from "@/lib/session";
+import { getFarm, listFarms } from "@/lib/data";
+import { DBG } from "@/lib/debug";
 
 function isPublicPath(path: string) {
-  // add any routes that should not be guarded
   return path.startsWith("/login");
 }
 
@@ -28,51 +32,105 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const [checking, setChecking] = useState(true);
 
   useEffect(() => {
+    DBG("AuthGate mount", {
+      pathname,
+      storedFarmId: getCurrentFarmId(),
+    });
+
     const unsub = onAuthStateChanged(auth(), async (u) => {
       setUser(u ?? null);
 
-      // If this is a public page, don’t block
+      DBG("AuthGate auth change", {
+        pathname,
+        hasUser: !!u,
+        uid: u?.uid ?? null,
+        email: u?.email ?? null,
+        storedFarmId: getCurrentFarmId(),
+      });
+
       if (isPublicPath(pathname)) {
+        DBG("AuthGate: public path -> allow");
         setChecking(false);
         return;
       }
 
       if (!u) {
-        // Not signed in -> login
+        DBG("AuthGate: no user -> redirect /login");
         setChecking(false);
         router.replace("/login");
         return;
       }
 
       try {
-        // Signed in -> check farms
+        DBG("AuthGate: calling listFarms()");
         const farms = await listFarms();
 
-        // No farms -> force onboarding (and don’t allow other routes)
+        DBG("AuthGate: listFarms() returned", {
+          count: farms?.length ?? 0,
+          ids: (farms ?? []).map((f: any) => f.id),
+        });
+
+        // No farms -> onboarding
         if (!farms.length) {
+          DBG("AuthGate: farms=0 -> redirect /onboarding");
           setChecking(false);
           if (!isOnboardingPath(pathname)) router.replace("/onboarding");
           return;
         }
 
-        // Farms exist -> require selected farmId (except onboarding/select-farm)
-        const currentFarmId = getCurrentFarmId();
+        const selected = getCurrentFarmId();
+        DBG("AuthGate: selected from storage", { selected });
 
-        if (!currentFarmId && !isSelectFarmPath(pathname) && !isOnboardingPath(pathname)) {
+        // If nothing selected, pick first farm (auto-heal)
+        if (!selected) {
+          DBG("AuthGate: no selected -> set first farm", { first: farms[0].id });
+          setCurrentFarmId(farms[0].id);
+          DBG("AuthGate: after setCurrentFarmId", { stored: getCurrentFarmId() });
           setChecking(false);
-          router.replace("/select-farm");
           return;
         }
 
+        // If selected is in the user's list, ok
+        const inList = farms.some((f: any) => f.id === selected);
+        DBG("AuthGate: selected in list?", { inList });
+
+        if (inList) {
+          DBG("AuthGate: allow");
+          setChecking(false);
+          return;
+        }
+
+        // Self-heal: try to fetch selected farm directly
+        DBG("AuthGate: selected NOT in list -> calling getFarm()", { selected });
+        const direct = await getFarm(selected);
+        DBG("AuthGate: getFarm() result", direct);
+
+        // If farm exists and owned by user, accept
+        if (direct && direct.userId === u.uid) {
+          DBG("AuthGate: direct ok -> allow");
+          setChecking(false);
+          return;
+        }
+
+        // Otherwise selection invalid
+        DBG("AuthGate: selection invalid -> clear");
+        clearCurrentFarmId();
+        DBG("AuthGate: after clear", { stored: getCurrentFarmId() });
+
         setChecking(false);
-      } catch {
-        // If farms fetch fails, keep user in app but stop spinner
+
+        // Don’t block onboarding/select-farm routes
+        if (!isSelectFarmPath(pathname) && !isOnboardingPath(pathname)) {
+          DBG("AuthGate: redirect /select-farm");
+          router.replace("/select-farm");
+        }
+      } catch (e: any) {
+        DBG("AuthGate: ERROR", { message: e?.message, code: e?.code, e });
         setChecking(false);
       }
     });
 
     return () => unsub();
-    // IMPORTANT: pathname affects routing decisions
   }, [router, pathname]);
 
   if (checking) {
@@ -83,6 +141,5 @@ export function AuthGate({ children }: { children: ReactNode }) {
     );
   }
 
-  // If we’re on public pages, or user is present (AuthGate redirects otherwise)
   return <>{children}</>;
 }
