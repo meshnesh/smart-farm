@@ -23,7 +23,7 @@ import { Card, CardBody, CardHeader } from "@/components/Card";
 import { auth, db } from "@/lib/firebaseClient";
 import { listFarms } from "@/lib/data";
 
-import { MapPin, LogOut, Shield, Bell, Users, Leaf } from "lucide-react";
+import { MapPin, LogOut, Shield, Bell, Users, Leaf, Pencil } from "lucide-react";
 
 const useFirestore = process.env.NEXT_PUBLIC_USE_FIRESTORE === "true";
 
@@ -259,7 +259,15 @@ export default function ProfilePage() {
 
               <div className="flex-1" />
 
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <Link
+                  href="/profile/edit"
+                  className="rounded-2xl border px-4 py-2 text-sm font-medium hover:bg-gray-50 inline-flex items-center gap-2"
+                >
+                  <Pencil className="h-4 w-4" />
+                  Edit profile
+                </Link>
+
                 <Link
                   href="/select-farm"
                   className="rounded-2xl border px-4 py-2 text-sm font-medium hover:bg-gray-50"
@@ -284,7 +292,7 @@ export default function ProfilePage() {
               </div>
             </div>
 
-            {/* Extra profile fields (single user for now) */}
+            {/* Extra profile fields */}
             <div className="mt-6 grid md:grid-cols-3 gap-3">
               <div className="rounded-2xl border p-4">
                 <div className="text-xs text-gray-500">Interested in</div>
@@ -343,6 +351,16 @@ export default function ProfilePage() {
                             ? (f.crops.length ? f.crops.join(", ") : "—")
                             : (f.crops ? String(f.crops) : "—")}
                         </div>
+
+                        <div className="mt-3">
+                          <Link
+                            href={`/farms/${encodeURIComponent(f.id)}/edit`}
+                            className="inline-flex items-center gap-2 rounded-2xl border px-3 py-2 text-xs font-medium hover:bg-gray-50"
+                          >
+                            <Pencil className="h-4 w-4" />
+                            Edit farm
+                          </Link>
+                        </div>
                       </div>
 
                       <span className="rounded-full border px-2 py-0.5 text-xs text-gray-700">
@@ -356,7 +374,7 @@ export default function ProfilePage() {
           </CardBody>
         </Card>
 
-        {/* Settings (single-user focus for now) */}
+        {/* Settings */}
         <Card>
           <CardHeader title="Settings" />
           <CardBody>

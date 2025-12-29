@@ -11,6 +11,7 @@ import {
   doc,
   getDoc,
   setDoc,
+  updateDoc,
   serverTimestamp,
   type Unsubscribe,
 } from "firebase/firestore";
@@ -446,4 +447,77 @@ export async function sensorSeries24h(sensorId: string, n = 48): Promise<Reading
         timestamp: dt,
       };
     });
+}
+
+export async function getUserProfile(userId: string) {
+  if (!useFirestore) return null;
+
+  const u = currentUser();
+  if (!u) return null;
+
+  // Only allow fetching self profile from client
+  if (u.uid !== userId) throw new Error("Not authorized");
+
+  const ref = doc(db(), "users", userId);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) return null;
+
+  return { id: snap.id, ...(snap.data() as any) };
+}
+
+export async function updateUserProfile(
+  userId: string,
+  input: {
+    firstName: string;
+    secondName: string;
+    phone?: string;
+    location?: string;
+    interestedIn?: string;
+  }
+) {
+  if (!useFirestore) return;
+
+  const u = currentUserOrThrow();
+  if (u.uid !== userId) throw new Error("Not authorized");
+
+  const ref = doc(db(), "users", userId);
+
+  await updateDoc(ref, {
+    firstName: input.firstName ?? "",
+    secondName: input.secondName ?? "",
+    phone: input.phone ?? "",
+    location: input.location ?? "",
+    interestedIn: input.interestedIn ?? "",
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export async function updateFarm(
+  farmId: string,
+  input: {
+    farmName: string;
+    location: string;
+    sizeInSquareMeters: number;
+    crops: string[];
+  }
+) {
+  if (!useFirestore) return;
+
+  const u = currentUserOrThrow();
+
+  const ref = doc(db(), "farms", farmId);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) throw new Error("Farm not found");
+
+  const x: any = snap.data();
+  if (x.userId !== u.uid) throw new Error("Not authorized");
+
+  // DO NOT touch userId or farmId here
+  await updateDoc(ref, {
+    farmName: input.farmName,
+    location: input.location,
+    sizeInSquareMeters: Math.round(input.sizeInSquareMeters),
+    crops: input.crops ?? [],
+    updatedAt: serverTimestamp(),
+  });
 }
