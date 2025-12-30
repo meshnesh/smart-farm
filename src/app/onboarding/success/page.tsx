@@ -1,15 +1,15 @@
 "use client";
 
 import Link from "next/link";
+import { Suspense, useEffect } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { PageShell } from "@/components/PageShell";
 import { Topbar } from "@/components/Topbar";
 import { Card, CardBody } from "@/components/Card";
 import { setCurrentFarmId } from "@/lib/session";
 import { CheckCircle2 } from "lucide-react";
-import { useEffect } from "react";
 
-export default function OnboardingSuccessPage() {
+function SuccessInner() {
   const params = useSearchParams();
   const router = useRouter();
 
@@ -61,5 +61,22 @@ export default function OnboardingSuccessPage() {
         </Card>
       </div>
     </PageShell>
+  );
+}
+
+export default function OnboardingSuccessPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-[60vh] flex items-center justify-center p-6">
+          <div className="rounded-2xl border p-6 w-full max-w-md bg-white">
+            <div className="font-semibold text-lg">Loading…</div>
+            <div className="text-sm text-gray-600 mt-1">Finalizing onboarding.</div>
+          </div>
+        </div>
+      }
+    >
+      <SuccessInner />
+    </Suspense>
   );
 }
