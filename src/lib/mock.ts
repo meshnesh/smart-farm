@@ -1,70 +1,133 @@
-import { Farm, Sensor, Worker } from "./types";
+// src/lib/mock.ts
+// Demo/mock data used when NEXT_PUBLIC_USE_FIRESTORE !== "true"
 
-export const farms: Farm[] = [
-  { id: "farm-001", name: "Mavuno Farm", location: "Nyandarua", crop: "Potatoes" },
-  { id: "farm-002", name: "Green Valley", location: "Naivasha", crop: "Tomatoes" },
+export const farms = [
+  {
+    id: "FARM123",
+    farmId: "FARM123",
+    farmName: "Demo Farm (Mock)",
+    name: "Demo Farm (Mock)",
+    location: "Nyandarua, Kenya",
+    crops: ["Potatoes", "Cabbage"],
+    zones: 3,
+    sizeInSquareMeters: 25000,
+    userId: "MOCK_USER",
+  },
+  {
+    id: "FARM456",
+    farmId: "FARM456",
+    farmName: "Green Valley (Mock)",
+    name: "Green Valley (Mock)",
+    location: "Nakuru, Kenya",
+    crops: ["Tomatoes", "Onions"],
+    zones: 2,
+    sizeInSquareMeters: 12000,
+    userId: "MOCK_USER",
+  },
 ];
 
-export const sensorsByFarm: Record<string, Sensor[]> = {
-  "farm-001": [
+// Sensors grouped by farmId.
+// IMPORTANT: Must match the shape your UI expects: { id, name, type, zone, status, lastSeen, latest }
+const now = Date.now();
+
+function minutesAgo(min: number) {
+  return new Date(now - min * 60 * 1000);
+}
+
+export const sensorsByFarm: Record<string, any[]> = {
+  FARM123: [
     {
       id: "S-1001",
-      name: "Soil Probe A1",
-      type: "soil",
-      zone: "Block A",
+      name: "Moisture Sensor A",
+      type: "moisture-temp",
+      zone: "Zone 1",
       status: "online",
       lastSeen: "2 min ago",
-      metrics: { moisture: 31, temp: 22, ec: 1.7 },
+      latest: {
+        soilMoisture: 31,
+        tempC: 22,
+        vMoist: 3.1,
+        vTemp: 0.22,
+        timestamp: minutesAgo(2),
+        deviceId: "DEV-001",
+        farmId: "FARM123",
+        zoneId: "Zone 1",
+      },
     },
     {
       id: "S-1002",
-      name: "Weather Station",
-      type: "weather",
-      zone: "HQ",
+      name: "Moisture Sensor B",
+      type: "moisture-temp",
+      zone: "Zone 2",
       status: "warning",
-      lastSeen: "12 min ago",
-      metrics: { humidity: 58, temp: 24, rain: 0 },
+      lastSeen: "18 min ago",
+      latest: {
+        soilMoisture: 24,
+        tempC: 23,
+        vMoist: 2.4,
+        vTemp: 0.23,
+        timestamp: minutesAgo(18),
+        deviceId: "DEV-002",
+        farmId: "FARM123",
+        zoneId: "Zone 2",
+      },
     },
     {
       id: "S-1003",
-      name: "Tank Level Sensor",
-      type: "water",
-      zone: "Pump House",
+      name: "Moisture Sensor C",
+      type: "moisture-temp",
+      zone: "Zone 3",
       status: "offline",
-      lastSeen: "3 days ago",
-      metrics: { level: 18 },
+      lastSeen: "3 hr ago",
+      latest: {
+        soilMoisture: 19,
+        tempC: 21,
+        vMoist: 1.9,
+        vTemp: 0.21,
+        timestamp: minutesAgo(180),
+        deviceId: "DEV-003",
+        farmId: "FARM123",
+        zoneId: "Zone 3",
+      },
     },
   ],
-  "farm-002": [
+
+  FARM456: [
     {
       id: "S-2001",
-      name: "Soil Probe B2",
-      type: "soil",
-      zone: "Block B",
+      name: "Tomato Bed Sensor",
+      type: "moisture-temp",
+      zone: "Zone 1",
       status: "online",
-      lastSeen: "5 min ago",
-      metrics: { moisture: 28, temp: 23, ec: 1.2 },
+      lastSeen: "just now",
+      latest: {
+        soilMoisture: 46,
+        tempC: 24,
+        vMoist: 4.6,
+        vTemp: 0.24,
+        timestamp: minutesAgo(0),
+        deviceId: "DEV-004",
+        farmId: "FARM456",
+        zoneId: "Zone 1",
+      },
+    },
+    {
+      id: "S-2002",
+      name: "Onion Row Sensor",
+      type: "moisture-temp",
+      zone: "Zone 2",
+      status: "online",
+      lastSeen: "6 min ago",
+      latest: {
+        soilMoisture: 41,
+        tempC: 23,
+        vMoist: 4.1,
+        vTemp: 0.23,
+        timestamp: minutesAgo(6),
+        deviceId: "DEV-005",
+        farmId: "FARM456",
+        zoneId: "Zone 2",
+      },
     },
   ],
 };
-
-export const workersByFarm: Record<string, Worker[]> = {
-  "farm-001": [
-    { id: "W-1", name: "Grace Wanjiku", phone: "+2547XX XXX XXX", role: "manager", zone: "All" },
-    { id: "W-2", name: "Peter Mwangi", phone: "+2547XX XXX XXX", role: "technician", zone: "Block A" },
-    { id: "W-3", name: "Amina Hassan", phone: "+2547XX XXX XXX", role: "worker", zone: "Block B" },
-  ],
-  "farm-002": [
-    { id: "W-9", name: "David Otieno", phone: "+2547XX XXX XXX", role: "manager", zone: "All" },
-  ],
-};
-
-export function kpiFromSensors(sensors: any[]) {
-  // rough example KPIs for UI
-  const online = sensors.filter((s) => s.status === "online").length;
-  const warning = sensors.filter((s) => s.status === "warning").length;
-  const offline = sensors.filter((s) => s.status === "offline").length;
-  const moistureVals = sensors.map((s) => s.metrics?.moisture).filter((v) => typeof v === "number") as number[];
-  const avgMoisture = moistureVals.length ? Math.round(moistureVals.reduce((a,b)=>a+b,0)/moistureVals.length) : null;
-  return { online, warning, offline, avgMoisture };
-}
