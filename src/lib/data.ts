@@ -521,3 +521,9 @@ export async function updateFarm(
     updatedAt: serverTimestamp(),
   });
 }
+
+/** WORKERS (stub for now) */
+export async function listWorkers(farmId: string) {
+  // TODO: implement when workers feature is ready
+  return [];
+}
